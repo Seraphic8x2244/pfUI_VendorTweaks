@@ -125,14 +125,40 @@ local function T_(key)
   return key
 end
 
+-- The 1.12-era GetItemInfo contract differs between client builds.
+-- Classic/SoloCraft-style results put stack/icon at 8/10, while Turtle WoW
+-- documents stack/icon at 7/9 (with the vendor price at 10).
+-- Read the values by type so neither client needs a realm-specific setting.
+local function ReadItemMetadata(itemKey)
+  local name, _, _, _, _, _, seventh, eighth, ninth, tenth = GetItemInfo(itemKey)
+
+  local stack
+  if type(eighth) == "number" then
+    stack = eighth
+  elseif type(seventh) == "number" then
+    stack = seventh
+  end
+
+  local texture
+  if type(tenth) == "string" and tenth ~= "" then
+    texture = tenth
+  elseif type(ninth) == "string" and ninth ~= "" and not string.find(ninth, "^INVTYPE_") then
+    texture = ninth
+  end
+
+  return name, stack, texture
+end
+
 local function CacheItemInfo(id, name, texture, stack)
   if not DB or not id then return end
   if type(DB.items) ~= "table" then DB.items = {} end
 
   local item = DB.items[id]
   if type(item) ~= "table" then item = {} end
+  -- Older builds may have saved Turtle's numeric sell value as an icon.
+  if type(item.icon) ~= "string" or item.icon == "" then item.icon = nil end
   if name then item.name = name end
-  if texture then item.icon = texture end
+  if type(texture) == "string" and texture ~= "" then item.icon = texture end
   if stack and tonumber(stack) then item.stack = tonumber(stack) end
   DB.items[id] = item
 end
@@ -145,17 +171,18 @@ local function TryResolveItemIcon(id)
   if not DB or not id then return false end
 
   local item = DB.items and DB.items[id]
-  if type(item) == "table" and item.icon then
-    return true
+  if type(item) == "table" then
+    if type(item.icon) == "string" and item.icon ~= "" then return true end
+    item.icon = nil
   end
 
-  local name, _, _, _, _, _, _, stack, _, texture = GetItemInfo(id)
+  local name, stack, texture = ReadItemMetadata(id)
   if name or texture or stack then
     CacheItemInfo(id, name, texture, stack)
   end
 
   item = DB.items and DB.items[id]
-  return type(item) == "table" and item.icon ~= nil
+  return type(item) == "table" and type(item.icon) == "string" and item.icon ~= ""
 end
 
 local function ResolveListedItemIcons()
@@ -711,6 +738,8 @@ end
 local function PlayBinAnimation(id, texture)
   local cached = DB and DB.items and id and DB.items[id]
   local cachedTexture = type(cached) == "table" and cached.icon or nil
+  if type(cachedTexture) ~= "string" or cachedTexture == "" then cachedTexture = nil end
+  if type(texture) ~= "string" or texture == "" then texture = nil end
   local chosenTexture = texture or cachedTexture or binLastTexture or "Interface\\Icons\\INV_Misc_QuestionMark"
 
   binLastTexture = chosenTexture
@@ -1499,6 +1528,7 @@ local function BuildComponentsPanel(parent)
     local item = DB.items and DB.items[id]
     local name = type(item) == "table" and item.name or nil
     local texture = type(item) == "table" and item.icon or nil
+    if type(texture) ~= "string" or texture == "" then texture = nil end
     return name or string.format(T_("VT_ID"), id), texture
   end
 
@@ -1696,9 +1726,9 @@ local function BuildComponentsPanel(parent)
     itemID = tonumber(itemID)
     if cursorType ~= "item" or not itemID then return end
 
-    local name, _, _, _, _, _, _, stack, _, texture = GetItemInfo(itemLink or itemID)
+    local name, stack, texture = ReadItemMetadata(itemLink or itemID)
     if not name or not texture or not stack then
-      local fallbackName, _, _, _, _, _, _, fallbackStack, _, fallbackTexture = GetItemInfo(itemID)
+      local fallbackName, fallbackStack, fallbackTexture = ReadItemMetadata(itemID)
       name = name or fallbackName
       texture = texture or fallbackTexture
       stack = stack or fallbackStack
